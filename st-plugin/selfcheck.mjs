@@ -2,7 +2,9 @@
 // Run:  node st-plugin/selfcheck.mjs
 import assert from 'node:assert/strict';
 
-const PORT = Number(process.env.LOCAL_SEARCH_PORT) || 18888;
+// 18899, not 18888: the check has to run while SillyTavern already owns the real port.
+const PORT = Number(process.env.LOCAL_SEARCH_PORT) || 18899;
+process.env.LOCAL_SEARCH_PORT = String(PORT);
 const base = `http://127.0.0.1:${PORT}`;
 const up = async () => { try { await fetch(base + '/', { signal: AbortSignal.timeout(1500) }); return true; } catch { return false; } };
 
