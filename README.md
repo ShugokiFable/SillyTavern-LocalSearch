@@ -5,7 +5,7 @@ measured rather than assumed:
 
 1. **Free web search** with no API key and no account — a small local endpoint
    that speaks the shape SillyTavern already knows how to read.
-2. **A local LM Studio model as a selectable API**, including the two
+2. **A local LM Studio model as a selectable API**, including the three
    non-obvious steps that otherwise make it look broken.
 
 Everything runs on your own machine. Nothing leaves it except the search query.
@@ -58,7 +58,43 @@ open. In SillyTavern:
 Test with a trigger phrase — "what is the current version of Rust" — or wrap
 the query in backticks, which forces a search regardless of phrasing.
 
-### Wanting it silent
+### Starting it automatically with SillyTavern
+
+`st-plugin/` is a SillyTavern **server plugin**. SillyTavern starts the search
+endpoint when it boots and kills it when it shuts down, so there is no window to
+remember and nothing to leave running afterwards.
+
+It needs `enableServerPlugins: true` in SillyTavern's `config.yaml`, then a
+junction from SillyTavern's `plugins` folder to `st-plugin`:
+
+```bat
+mklink /J "C:\path\to\SillyTavern\plugins\local-search" "C:\path\to\SillyTavern-LocalSearch\st-plugin"
+```
+
+A junction rather than a copy, so pulling this repo updates the plugin with no
+second step. SillyTavern's plugin auto-update ignores it, because a junction to
+a subdirectory is not a Git repository root.
+
+On the next start SillyTavern logs:
+
+```
+Initializing plugin from plugins\local-search\index.mjs
+[local-search] started on http://127.0.0.1:18888 (pid 12345)
+```
+
+The plugin probes the port first, so running `Start-LocalSearch.bat` by hand
+still works — SillyTavern sees the endpoint is up and does not start a second
+copy. If no Python on `PATH` can `import ddgs` it says so and starts nothing,
+instead of failing silently at the first search.
+
+Override the defaults with the `LOCAL_SEARCH_PORT` / `LOCAL_SEARCH_HOST`
+environment variables if `18888` is taken.
+
+```bash
+node st-plugin/selfcheck.mjs   # start -> real search -> stop -> port released
+```
+
+### Running it by hand, without a window
 
 The `.bat` keeps a console window open on purpose, so it is obvious when search
 is on. To run it without a window:
@@ -151,6 +187,55 @@ Qwen3.6-35B-A3B build through SillyTavern:
 
 So a short Response Length does not give you a short answer, it gives you *no*
 answer. Set it to 512 at the very minimum, and 1024+ in practice.
+
+### Chat Completion connects, then every reply fails
+
+Symptom: the model list loads, Text Completion works, and Chat Completion
+returns nothing. LM Studio's log has:
+
+```
+Engine protocol predict request returned 500:
+While executing CallExpression at line 85, column 32 in source:
+...{{- raise_exception('System message must be at the beginning...
+Error: Jinja Exception: System message must be at the beginning.
+```
+
+That is the *model's chat template* refusing the prompt, not a connection
+problem. Qwen3-family templates allow `system` only as the first message.
+SillyTavern sends `system` messages mid-conversation all the time — the
+jailbreak block, author's note, world info at depth, and the Web Search
+extension's own injection, which lands at depth 2 as a system message.
+
+Fix it with **Prompt Post-Processing** in the Chat Completion panel, under the
+connection fields. `mergeMessages` in `src/prompt-converters.js` does exactly
+what the template wants:
+
+```js
+// Force mid-prompt system messages to be user messages
+if (i > 0 && mergedMessages[i].role === 'system') {
+    mergedMessages[i].role = 'user';
+}
+```
+
+| Option | `custom_prompt_post_processing` | Note |
+|---|---|---|
+| None | `''` | the broken default here |
+| Semi-strict, tools | `semi_tools` | **use this** |
+| Strict, tools | `strict_tools` | also works; pads with a `Let's get started.` filler turn |
+| Semi-strict / Strict | `semi` / `strict` | same merge, but silently disables tool calling |
+
+The `_tools` variants matter: `isToolCallingSupported()` in
+`public/scripts/tool-calling.js` only sends tool definitions when
+post-processing is `none`, `merge_tools`, `semi_tools` or `strict_tools`.
+Picking plain `semi` fixes the crash and quietly turns off function calling.
+
+Measured against this setup, same five messages with a system message in the
+middle, through SillyTavern's own `/api/backends/chat-completions/generate`:
+
+| Post-processing | Result |
+|---|---|
+| `''` | `{"error":{"message":"Bad Request"}}` |
+| `semi_tools` | `'The current Rust version is 1.90.'` |
 
 ### While you are there
 
