@@ -1,17 +1,93 @@
 # SillyTavern: local model + free web search
 
-Two things SillyTavern can do but does not do out of the box, wired up and
-measured rather than assumed:
-
-1. **Free web search** with no API key and no account — a small local endpoint
-   that speaks the shape SillyTavern already knows how to read.
-2. **A local LM Studio model as a selectable API**, including the four
-   non-obvious steps that otherwise make it look broken.
-3. **What it costs at run time** — the settings that quietly make every
-   turn slower, measured.
-4. **Local RAG and one-click backend switching** on the same endpoint.
+Web search in SillyTavern with **no API key and no account**, and a local
+LM Studio model that actually answers instead of silently failing.
 
 Everything runs on your own machine. Nothing leaves it except the search query.
+
+---
+
+## Install
+
+**Close SillyTavern first.** While its browser tab is open it writes its own
+copy of the settings back over the file, so anything changed underneath is lost.
+
+1. Download this repo (green **Code** button → **Download ZIP**, then unzip) or:
+
+   ```bash
+   git clone https://github.com/ShugokiFable/SillyTavern-LocalSearch
+   ```
+
+2. Double-click **`Install.bat`**.
+
+That is the whole install. It finds SillyTavern, installs the one dependency,
+turns on server plugins, links the plugin in, and sets the two settings that
+otherwise make this look broken. Re-running it is safe.
+
+If it cannot find SillyTavern it asks once for the path. You can also pass it:
+
+```bash
+python install.py --sillytavern "C:\path\to\SillyTavern"
+python install.py --dry-run
+```
+
+Start SillyTavern. Its console should say:
+
+```
+[local-search] started on http://127.0.0.1:18888
+```
+
+**To search the web, wrap the query in backticks** in any chat message:
+
+> Hey, can you check `current version of rust` for me?
+
+That is the only thing that triggers a search. See
+[Web search fires on almost every roleplay turn](#web-search-fires-on-almost-every-roleplay-turn)
+for why the alternative is worse.
+
+### Using LM Studio as the model
+
+Load a model in LM Studio and start its server (`lms server start`, or the
+toggle in the app). Then in SillyTavern:
+
+**API Connections** → API: **Chat Completion** → Source: **Custom
+(OpenAI-compatible)**
+
+| Field | Value |
+|---|---|
+| Custom Endpoint | `http://127.0.0.1:1234/v1` |
+| Custom API Key | any non-empty text, e.g. `local` |
+| Prompt Post-Processing | **Semi-strict, tools** |
+| Response (tokens) | **1024 or more** |
+
+Every one of those four has a failure mode that looks like something else
+entirely. They are documented, with measurements, in
+[section 2](#2-lm-studio-as-a-sillytavern-api).
+
+### What the installer changes
+
+| | |
+|---|---|
+| `pip install ddgs` | the one dependency, DuckDuckGo search |
+| `config.yaml` | `enableServerPlugins: true` |
+| `plugins/local-search` | junction to `st-plugin/`, so search starts and stops with SillyTavern |
+| Web Search settings | source `searxng`, URL `http://127.0.0.1:18888`, backticks on, trigger phrases **off** |
+| `custom_prompt_post_processing` | `semi_tools` — only if you are already on Custom (OpenAI-compatible) |
+
+It backs up `settings.json` to `settings.json.bak-install` before its first
+write, and never touches your presets, characters or chats.
+
+---
+
+## The rest of this file
+
+is what was measured to get there, and is only worth reading when something
+misbehaves:
+
+- [1. Free web search](#1-free-web-search) — why none of the built-in sources are free, and what the shim implements
+- [2. LM Studio as a SillyTavern API](#2-lm-studio-as-a-sillytavern-api) — four failures that look like connection problems
+- [3. What this costs at run time](#3-what-this-costs-at-run-time) — the settings that quietly slow every turn
+- [4. Vectors](#4-local-rag-on-the-same-endpoint-vectors) and [5. Connection Profiles](#5-one-click-per-backend-connection-profiles) — optional extras
 
 ---
 
@@ -45,21 +121,22 @@ So `local_search.py` serves the **SearXNG shape** that SillyTavern already
 parses, backed by DuckDuckGo through the `ddgs` package. No key, no account, no
 container.
 
-### Setup
+### Setting it up by hand
+
+`Install.bat` does all of this. If you would rather not run it:
 
 ```bash
 python -m pip install ddgs
 ```
 
-Then run `Start-LocalSearch.bat` (or `python local_search.py`) and leave it
-open. In SillyTavern:
+Run `Start-LocalSearch.bat` (or `python local_search.py`) and leave it open.
+In SillyTavern, **Extensions → Web Search**:
 
-**Extensions → Web Search**
 - Source: **SearXNG**
 - SearXNG URL: `http://127.0.0.1:18888`
+- **Trigger Phrases: off**, **Backticks: on**
 
-Test with a trigger phrase — "what is the current version of Rust" — or wrap
-the query in backticks, which forces a search regardless of phrasing.
+Then wrap a query in backticks to search.
 
 ### Starting it automatically with SillyTavern
 
@@ -325,6 +402,26 @@ The only working control is on the server side: LM Studio's
 `llm.prediction.reasoning.budgetTokens`, set in the model's config in the
 Developer tab. It is not reachable through the OpenAI-compatible API, so no
 SillyTavern setting can substitute for it.
+
+### JIT loading picks its own context length
+
+Letting SillyTavern's first request load the model is convenient and quietly
+wrong. LM Studio sizes a just-in-time load to the request it is answering:
+
+```
+lms ps
+qwen3.6-35b-...   IDLE   18.34 GB   5888        <- after a short first message
+```
+
+5,888 tokens. The first long roleplay prompt then does not fit and the model is
+reloaded — 16 GB off disk, mid-conversation. Load it yourself instead, once:
+
+```bash
+lms load <model-key> -c 65536 --ttl 86400
+```
+
+`--ttl` is what stops it being unloaded again between sessions; the default is
+an hour.
 
 ### The weights have to fit, and context length will not save you
 
