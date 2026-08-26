@@ -16,6 +16,7 @@ Run:
     python install.py                 # find SillyTavern automatically
     python install.py --sillytavern "C:\\path\\to\\SillyTavern"
     python install.py --dry-run       # print the plan, change nothing
+    python install.py --update        # also update SillyTavern itself first
 
 Safe to re-run; every step checks before it writes.
 
@@ -108,6 +109,75 @@ def is_running(port: int) -> bool:
 # --------------------------------------------------------------------------
 # steps
 # --------------------------------------------------------------------------
+
+def git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True)
+
+
+def step_update_sillytavern(st: Path, dry: bool) -> None:
+    """Update SillyTavern and the Web Search extension.
+
+    Nothing this installer touches is tracked by SillyTavern -- config.yaml,
+    plugins/ and data/ are all in its .gitignore -- so a pull cannot take the
+    tweaks away. The install steps still re-run afterwards, because an update
+    can add new settings defaults.
+    """
+    if not shutil.which('git'):
+        say(INFO, 'git not found; skipping the update, installing only')
+        return
+    if not (st / '.git').exists():
+        say(INFO, 'SillyTavern is not a git checkout; skipping the update')
+        return
+
+    if dry:
+        say(INFO, 'would run: git pull --rebase --autostash, then npm install')
+        return
+
+    before = git(['rev-parse', '--short', 'HEAD'], st).stdout.strip()
+    say(INFO, f'updating SillyTavern (currently {before})...')
+    pull = git(['pull', '--rebase', '--autostash'], st)
+    if pull.returncode != 0:
+        say(NOPE, 'git pull failed; leaving SillyTavern as it is:')
+        print((pull.stderr or pull.stdout).strip()[:400])
+    else:
+        after = git(['rev-parse', '--short', 'HEAD'], st).stdout.strip()
+        if after == before:
+            say(OK, f'SillyTavern already up to date ({after})')
+        else:
+            say(OK, f'SillyTavern {before} -> {after}')
+            changed.append(f'updated SillyTavern to {after}')
+
+    # The Web Search extension is its own repository, and is the one third-party
+    # extension this project depends on. Anything else in there is left alone.
+    ext = st / 'public' / 'scripts' / 'extensions' / 'third-party' / 'Extension-WebSearch'
+    if (ext / '.git').exists():
+        if git(['status', '--porcelain'], ext).stdout.strip():
+            say(INFO, 'Extension-WebSearch has local changes; not updating it')
+        else:
+            before = git(['rev-parse', '--short', 'HEAD'], ext).stdout.strip()
+            if git(['pull', '--ff-only'], ext).returncode != 0:
+                say(INFO, 'Extension-WebSearch could not fast-forward; left as it is')
+            else:
+                after = git(['rev-parse', '--short', 'HEAD'], ext).stdout.strip()
+                say(OK, f'Extension-WebSearch {before}' + ('' if after == before else f' -> {after}'))
+                if after != before:
+                    changed.append('updated Extension-WebSearch')
+    else:
+        say(INFO, 'Extension-WebSearch is not installed; run: '
+                  'git clone https://github.com/SillyTavern/Extension-WebSearch '
+                  '"<SillyTavern>/public/scripts/extensions/third-party/Extension-WebSearch"')
+
+    if not shutil.which('npm'):
+        say(INFO, 'npm not found; skipping dependency install')
+        return
+    say(INFO, 'npm install...')
+    npm = subprocess.run(
+        ['npm', 'install', '--no-save', '--no-audit', '--no-fund',
+         '--loglevel=error', '--no-progress', '--omit=dev', '--ignore-scripts'],
+        cwd=st, shell=(os.name == 'nt'))
+    say(OK if npm.returncode == 0 else NOPE,
+        'npm install finished' if npm.returncode == 0 else 'npm install failed - SillyTavern may not start')
+
 
 def step_dependency(dry: bool) -> None:
     probe = subprocess.run([sys.executable, '-c', 'import ddgs'], capture_output=True)
@@ -240,6 +310,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--sillytavern', help='path to the SillyTavern folder')
     ap.add_argument('--dry-run', action='store_true', help='print the plan, change nothing')
+    ap.add_argument('--update', action='store_true',
+                    help='update SillyTavern and the Web Search extension first')
+    ap.add_argument('--start', action='store_true',
+                    help='start SillyTavern when everything is done')
     args = ap.parse_args()
 
     if not PLUGIN_SRC.is_dir():
@@ -254,6 +328,9 @@ def main() -> int:
             'an open tab writes its own copy of the settings back over this one.')
 
     print()
+    if args.update:
+        step_update_sillytavern(st, args.dry_run)
+        print()
     step_dependency(args.dry_run)
     step_enable_plugins(st / 'config.yaml', args.dry_run)
     step_link_plugin(st, args.dry_run)
@@ -267,10 +344,17 @@ def main() -> int:
     else:
         say(OK, 'everything was already set up')
 
+    print(f'\nSearch the web from a chat by wrapping the query in backticks:')
+    print('    `current version of rust`')
+
+    if args.start and not args.dry_run:
+        print(f'\nStarting SillyTavern. Watch for "[local-search] started on {SEARCH_URL}".')
+        print(f'Open http://127.0.0.1:{port} once it is up. Ctrl+C here stops both.\n')
+        env = {**os.environ, 'NODE_ENV': 'production'}
+        return subprocess.call(['node', 'server.js'], cwd=st, env=env)
+
     print('\nNext: start SillyTavern. You should see this in its console:')
     print(f'    [local-search] started on {SEARCH_URL}')
-    print('Then search the web from a chat by wrapping the query in backticks:')
-    print('    `current version of rust`')
     return 0
 
 
