@@ -1,11 +1,66 @@
-# SillyTavern: local model + free web search
+<p align="center">
+  <img src="assets/mark.svg" width="72" height="72" alt="SillyTavern Local Search mark">
+</p>
 
-Web search in SillyTavern with **no API key and no account**, and a local
-LM Studio model that actually answers instead of silently failing.
+<h1 align="center">SillyTavern Local Search</h1>
 
-Everything runs on your own machine. Nothing leaves it except the search query.
+<p align="center"><strong>Keyless web search. Local models that actually answer.</strong></p>
 
----
+<p align="center">
+  DuckDuckGo behind the SearXNG shape SillyTavern already parses,<br>
+  plus the LM Studio Chat Completion fixes that stop silent empty replies.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ShugokiFable/SillyTavern-LocalSearch/actions/workflows/ci.yml"><img src="https://github.com/ShugokiFable/SillyTavern-LocalSearch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-53d7ff?labelColor=0d0f11" alt="MIT License"></a>
+  <a href="https://github.com/ShugokiFable/SillyTavern-LocalSearch/releases/tag/v1.0.0"><img src="https://img.shields.io/badge/release-v1.0.0-8f9aa6?labelColor=0d0f11" alt="v1.0.0"></a>
+  <img src="https://img.shields.io/badge/python-3.x-8f9aa6?labelColor=0d0f11" alt="Python">
+</p>
+
+<p align="center">
+  <a href="#install">Install</a>
+  ·
+  <a href="#using-lm-studio-as-the-model">LM Studio</a>
+  ·
+  <a href="#1-free-web-search">DuckDuckGo facts</a>
+  ·
+  <a href="#2-lm-studio-as-a-sillytavern-api">LM Studio facts</a>
+  ·
+  <a href="#honest-status">Status</a>
+</p>
+
+## Why it exists
+
+SillyTavern's Web Search extension ships six sources. None of them is both free and self-contained: SerpApi / Tavily / Serper / Z.AI want keys, KoboldCpp wants KoboldCpp, SearXNG wants an instance. Public SearXNG hosts were measured from this machine and failed (captcha or HTTP 429).
+
+Separately, a local LM Studio model through Chat Completion can look connected and still return nothing: missing API-key field, thinking tokens eating the reply budget, Qwen3 templates rejecting mid-prompt `system` messages as a bare `Bad Request`.
+
+This repo is those two fixes, installed with one double-click.
+
+## What you get
+
+Five writes. Each exists because something silently misbehaves without it.
+
+| Change | Effect |
+| --- | --- |
+| `plugins/local-search` junction | SillyTavern starts `local_search.py` on `127.0.0.1:18888` and kills it on shutdown |
+| `enableServerPlugins: true` | Required; SillyTavern otherwise loads no server plugin, silently |
+| Web Search → SearXNG URL `http://127.0.0.1:18888` | Keyless DuckDuckGo behind the HTML shape the extension already parses |
+| Trigger phrases **off**, backticks **on** | Search fires on `` `current version of rust` ``, not on `can you` / `what is` |
+| Prompt Post-Processing `semi_tools` | Strict chat templates stop raising `System message must be at the beginning`; tool calling stays on |
+
+Nothing leaves the machine except the search query. Loopback only — do not bind `0.0.0.0`.
+
+## Project map
+
+```text
+local_search.py       DuckDuckGo → SearXNG-shaped HTML on 127.0.0.1:18888
+st-plugin/            SillyTavern server plugin (junction target)
+install.py            one-shot installer
+UpdateAndStart.bat    pull + re-assert + start
+test_local_search.py  live HTML-contract tests
+```
 
 ## Install
 
@@ -648,6 +703,21 @@ If you drive the same LM Studio model from
 context or higher**. Hermes hard-refuses any model whose window is under 64,000
 tokens and raises before the first turn. LM Studio commonly saves 32,768, which
 is fine for SillyTavern and a non-starter there.
+
+## Honest status
+
+Verified in this tree:
+
+- CI runs `python test_local_search.py` (live local server: `#urls`, `client*.css` href, snippets, absolute links, `data-src` images, empty-query page)
+- Installer steps in `install.py` as listed above
+- Tagged GitHub release [v1.0.0](https://github.com/ShugokiFable/SillyTavern-LocalSearch/releases/tag/v1.0.0)
+
+Not claimed:
+
+- That DuckDuckGo will never rate-limit (bursts degrade to empty results, not a crash)
+- That `reasoning_effort` / `/no_think` can turn off a reasoning model through the OpenAI-compatible API (measured: they cannot)
+- A hosted SearXNG of our own
+- Changes to your presets, characters, chats, lorebooks, or other third-party extensions
 
 ## License
 
